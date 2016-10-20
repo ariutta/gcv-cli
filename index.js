@@ -18,70 +18,41 @@
  *
  */
 
-var config = require('./config.json');
 var fs = require('fs');
+var hl = require('highland');
+var isUrl = require('is-url');
 var request = require('request');
 
-var API_KEY = config.key;
+var API_KEY = process.env.GCV_API_KEY;
 
-// http makes an HTTP request and calls callback with parsed JSON.
-var http = function(method, url, body, cb) {
-  var options = {
-    method: method,
-    url: url,
-    body: body,
-    headers: {
-      'Content-Type': 'application/json',
-    }
-  };
+var getFile = function(filepath) {
+  return isUrl(filepath) ? request(filepath) : fs.createReadStream(filepath);
+}
 
-  request(options, function(err, response, body) {
-    if (err) {
-      return cb(err, JSON.parse(body));
-    }
-    if (response.statusCode === 200) {
-      return cb(null, JSON.parse(body));
-    }
-  });
-};
-
-// detect makes a Cloud Vision API request with the API key.
-var detect = function(type, b64data, cb) {
+module.exports = function(filepath, type) {
   var url = 'https://vision.googleapis.com/v1/images:annotate?key=' + API_KEY;
-  var data = {
-    requests: [{
-      image: {content: b64data},
-      features: [{'type': type}]
-    }]
-  };
-  http('POST', url, JSON.stringify(data), cb);
-};
 
-var b64 = function(filepath, cb) {
-  // read binary data
-  fs.readFile(filepath, function(err, bitmap) {
-    if (err) {
-      return cb(err, bitmap);
-    }
-    // convert binary data to base64 encoded string
-    return cb(null, new Buffer(bitmap).toString('base64'));
-  });
-};
-
-var ocr = function(filepath, cb) {
-  b64(filepath, function(err, b64data) {
-    if (err) {
-      return cb(err, b64data);
-    }
-    detect('TEXT_DETECTION', b64data, function(err, data) {
-      if (err) {
-        return cb(err, data);
+  return hl(getFile(filepath))
+  .collect()
+  .map((chunks) => Buffer.concat(chunks).toString('base64'))
+  .map(function(b64data) {
+    return {
+      requests: [{
+        image: {content: b64data},
+        features: [{'type': type}]
+      }]
+    };
+  })
+  .map(JSON.stringify)
+  .flatMap(function(body) {
+    var options = {
+      method: 'POST',
+      url: url,
+      body: body,
+      headers: {
+        'Content-Type': 'application/json',
       }
-      return cb(null, data);
-    });
+    };
+    return hl(request(options));
   });
-};
-
-module.exports = {
-  ocr: ocr
 };
